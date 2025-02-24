@@ -1,0 +1,813 @@
+---
+title: "Applied Statistics Final Project: Heart Disease Health Indicators"
+author: "Maria Varghese, Esther Aruti, Abhina Premachandran, Tyler Anatole"
+date: "2023-12-11"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+# Introduction
+
+According to the CDC, one person dies every 33 seconds from heart disease, and is the leading cause of death in the United States. Additionally, heart disease costs the United States about \$239.9 billion each year from 2018 to 2019. This includes the cost of health care services, medicines, and lost productivity due to death.
+
+Heart disease is characterized by the buildup of plaque in coronary arteries, which is associated with aging, high blood pressure, and diabetes. These, and many more risk factors can result in typical heart disease symptoms such as chest pain, heart attack, or sudden cardiac arrest.
+
+Because of the many risk factors associated with heart disease, it is possible to predict when a person is more likely to suffer from symptoms and take preventative measures against the disease.
+
+This project will explore factors related to heart disease, and look at the strength of their relationships. The data set used was found on Kaggle (<https://www.kaggle.com/datasets/alexteboul/heart-disease-health-indicators-dataset>), and was collected by the Behavioral Risk Factor Surveillance System. This is a health related telephone survey by the CDC that collects responses every year. It contains over 244,000 survey responses for 22 questions regarding health.
+
+The data in this set is written in such a way where a value of 0 represents 'No' to the question in the corresponding column, and 1 represents 'Yes'. However, in the 'Age' column, the values 1-13 represent different age intervals. So is the case for the 'Income' and 'Education' columns.
+
+# Exploratory Data Analysis
+
+## Data Cleaning
+
+First, we will begin by importing all necessary libraries.
+
+```{r}
+suppressWarnings(suppressMessages(library(dplyr)))
+suppressWarnings(suppressMessages(library(ggplot2)))
+suppressWarnings(suppressMessages(library(tidyr)))
+suppressWarnings(suppressMessages(library(pROC)))
+suppressWarnings(suppressMessages(library(boot)))
+suppressWarnings(suppressMessages(library(caret)))
+suppressWarnings(suppressMessages(library(ISLR)))
+suppressWarnings(suppressMessages(library(scales)))
+```
+
+Reading in the data and taking a quick look at it.
+
+```{r}
+#setwd('~/DSE I1030_Applied Statistics/')
+data <- read.table('heart_disease_health_indicators_BRFSS2015.csv', sep=",", header = 1)
+head(data)
+```
+
+Looking at the data types.
+
+```{r}
+str(data)
+```
+
+Now let's look at a few summary statistics.
+
+```{r}
+summary(data)
+```
+
+Also, looking at the number of missing values.
+
+```{r}
+sum(is.na(data))
+```
+
+It looks like the data has already been very well cleaned, and has no missing values!
+
+We will remove all rows where people haven't checked cholesterol in five years or more.
+
+```{r}
+data1 <- data[(data$CholCheck != 0), ]
+```
+
+Now let's check if there is an even amount of people with and without heart disease sampled.
+
+```{r}
+sum(data1$HeartDiseaseorAttack == 1)
+sum(data1$HeartDiseaseorAttack == 0)
+```
+
+There are way more observations for people without heart disease than those with. It looks like we may need to do some stratification.
+
+```{r}
+# even out number of people with and without heart disease
+rows_to_remove <- data1 %>%
+  filter(HeartDiseaseorAttack == 0) %>%
+  sample_n(193000)
+
+# Create a new data frame without the identified rows
+filtered_data <- data1 %>%
+  anti_join(rows_to_remove)
+
+sum(filtered_data$HeartDiseaseorAttack == 1)
+sum(filtered_data$HeartDiseaseorAttack == 0)
+```
+
+Now that they are of similar size, we can continue.
+
+Let's select data for all people that have heart disease.
+
+```{r}
+heart_disease <- filtered_data[(filtered_data$HeartDiseaseorAttack == 1),]
+```
+
+Now for all people that do not have heart disease.
+
+```{r}
+no_heart_disease <-filtered_data[(filtered_data$HeartDiseaseorAttack == 0),]
+```
+
+## Hypothesis Testing
+
+Testing to see if certain categorical variables impact our target variable. First we change our binary columns to yes or no depending on the number. In this case, Yes is 1 and No is 0. We exclude our target variable `HeartDiseaseorAttack` as we need our x and y to have two levels.
+
+```{r}
+numerical_data <- filtered_data %>%
+  mutate(across(c('HighBP', 'HighChol', 'Smoker', 'Stroke', 'PhysActivity', 'Fruits', 'Veggies', 'HvyAlcoholConsump', 'AnyHealthcare', 'NoDocbcCost', 'DiffWalk', 'Sex'), ~ case_when(.x == 1 ~ "Yes", .x == 0 ~ "No")))
+```
+
+```{r}
+
+for ( col in c('HighBP', 'HighChol', 'Smoker', 'Stroke', 'PhysActivity', 'Fruits', 'Veggies', 'HvyAlcoholConsump', 'AnyHealthcare', 'NoDocbcCost', 'DiffWalk', 'Sex', 'Age')){
+  # creating our table
+  print(paste0("Table for Heart Disease or Attack and ", col, ":"))
+  print(table(numerical_data$HeartDiseaseorAttack, numerical_data[[col]]))
+  
+  
+  # running our chi squared test
+  print(paste0("Chi Squared for Heart Disease or Attack and ", col, ":"))
+  print(chisq.test(numerical_data$HeartDiseaseorAttack, numerical_data[[col]]))
+  
+  print("--------------------------------------------------------------")
+}
+
+```
+
+The tables printed show the distribution of our target variable `HeartDiseasesorAttack` and categorical variables: `HighBP`, `HighChol`, `Smoker`, `Stroke`, `PhysActivity`, `Fruits`, `Veggies`, `HvyAlcoholConsump`, `AnyHealthcare`, `NoDocbcCost`, `DiffWalk`, `Sex` along with its relationship. Let's go through the results:
+
+All categorical variables show a strong relationship with our target. Most categorical variables have p-values of 2.2e-16 or 0.00000000000000022 which is very close to zero indicating that those variables are considered statistically significant and do have an impact on our target variable!
+
+We can now begin plotting.
+
+## Plotting
+
+### High Blood Pressure
+
+First, we will look at the differences in high blood pressure between people that have heart disease and people that don't.
+
+```{r}
+# change 0 to no and 1 to yes
+highbp <- filtered_data %>%
+  mutate(HighBP = ifelse(HighBP == 0, "No", "Yes"))
+
+# number of people with high blood pressure
+ggplot(highbp, aes(x = as.factor(HighBP), fill = as.factor(HighBP))) +
+  geom_bar() +
+  scale_fill_manual(values = c('blue', 'red')) +
+  theme(legend.position = "none") +
+  facet_wrap(~HeartDiseaseorAttack, labeller = labeller(HeartDiseaseorAttack = c('0' = 'No Heart Disease', '1' = 'Heart Disease')), strip.position = "top") +
+  labs(title = "Heart Disease and Blood Pressure", x = 'Have High Blood Pressure?', y = 'Count') +
+  scale_y_continuous(labels = label_number(scale = .1))
+
+```
+
+From this plot we can see that, people with heart disease tend to have high blood pressure compared to people without heart disease.
+
+### High Cholesterol
+
+Here we will compare high cholesterol between people with and without heart disease.
+
+```{r}
+# in high cholesterol column, change 0 to No, and 1 to Yes
+hi_chol <- filtered_data %>%
+  mutate(HighChol = ifelse(HighChol == 0, "No", "Yes"))
+
+# bar plot for people with heart disease that have high cholesterol vs don't
+ggplot(hi_chol, aes(x = as.factor(HighChol), fill = as.factor(HighChol))) +
+  geom_bar() +
+  scale_fill_manual(values = c('blue', 'red')) + 
+  theme(legend.position = "none") +
+  facet_wrap(~HeartDiseaseorAttack, labeller = labeller(HeartDiseaseorAttack = c('0' = 'No Heart Disease', '1' = 'Heart Disease')), strip.position = "top") +
+  labs(title = "Heart Disease and High Cholesterol", x = 'High Cholesterol?', y = 'Count') +
+  scale_y_continuous(labels = label_number(scale = .1))
+```
+
+This plot shows a similar trend where people with heart disease tend to also have high cholesterol. Also, when compared to the previous plot, it seems that the same amount of people that have high blood pressure, also have high cholesterol.
+
+### Smoking
+
+Here we will compare smoking in people with and without heart disease.
+
+```{r}
+# in smoke column, change 0 to No, and 1 to Yes
+smoke <- filtered_data %>%
+  mutate(Smoker = ifelse(Smoker == 0, "No", "Yes"))
+
+# bar plot for people that smoke vs don't
+  ggplot(smoke, aes(x = as.factor(Smoker), fill = as.factor(Smoker))) +
+    geom_bar() +
+    scale_fill_manual(values = c('blue', 'red')) +
+    theme(legend.position = "none") +
+    facet_wrap(~HeartDiseaseorAttack, labeller = labeller(HeartDiseaseorAttack = c('0' = 'No Heart Disease', '1' = 'Heart Disease')), strip.position = "top") +
+    labs(title = "Heart Disease and Smoking", x = 'Smoker?', y = 'Count') +
+    scale_y_continuous(labels = label_number(scale = .1))
+```
+
+This plot shows that for people with heart disease, more people smoke than those who don't, especially compared to people without heart disease. However this difference is only by a few hundred people. Perhaps smoking is not as strongly correlated to heart disease as other factors?
+
+### Age
+
+Here we will compare the ages of people with heart disease.
+
+```{r}
+# plot of ages of people that have heart disease
+ggplot(heart_disease, aes(x = as.factor(Age), fill = as.factor(Age))) +
+  geom_bar() +
+  scale_fill_manual(
+    values = c("#1f78b4", "#33a02c", "#e31a1c", "#ff7f00", "#6a3d9a", "#a6cee3", "#b2df8a", "#fb9a99", "#fdbf6f", "#cab2d6", "#ffff99", "#b15928", "#33ccff"),
+    labels = c('18-24', '25-30', '30-35', '35-40', '40-45', '45-50', '50-55', '55-60', '60-65', '65-70', '70-75', '75-80', '80+')
+  ) +
+  labs(title = "Ages of People with Heart Disease", x = 'Age Interval', y = 'Count') +
+  guides(fill = guide_legend(title = "Age Group"))
+```
+
+This plot shows the number of people in specific age brackets that have heart disease. From this, it is clear that there are greater amounts of older people with heart disease compared to younger people, especially from ages 60 to 80.
+
+### Sex
+
+Here we will compare the prevalence of heart disease between the sexes.
+
+```{r}
+# change 0 to no and 1 to yes
+sex <- filtered_data %>%
+  mutate(Sex = ifelse(Sex == 0, "Female", "Male"))
+
+# plots for sex differences
+ggplot(sex, aes(x = as.factor(Sex), fill = as.factor(Sex))) +
+  geom_bar() +
+  scale_fill_manual(values = c('blue', 'red')) + 
+  theme(legend.position = "none") +
+  facet_wrap(~HeartDiseaseorAttack, labeller = labeller(HeartDiseaseorAttack = c('0' = 'No Heart Disease', '1' = 'Heart Disease')), strip.position = "top") +
+  labs(title = "Heart Disease and Sex", x = 'Sex', y = 'Count') +
+  scale_y_continuous(labels = label_number(scale = .1))
+```
+
+Here, it looks like there are more women without heart disease than men, and there are more men with heart disease than women, but only by a small amount.
+
+### Heavy Alcohol Consumption
+
+Here we will compare heart disease among people with and without heavy alcohol consumption.
+
+```{r}
+# in alcohol column, change 0 to No, and 1 to Yes
+alch <- filtered_data %>%
+  mutate(HvyAlcoholConsump = ifelse(HvyAlcoholConsump == 0, "No", "Yes"))
+
+# bar plot for people that smoke vs don't
+  ggplot(alch, aes(x = as.factor(HvyAlcoholConsump), fill = as.factor(HvyAlcoholConsump))) +
+    geom_bar() +
+    scale_fill_manual(values = c('blue', 'red')) +
+    theme(legend.position = "none") +
+    facet_wrap(~HeartDiseaseorAttack, labeller = labeller(HeartDiseaseorAttack = c('0' = 'No Heart Disease', '1' = 'Heart Disease')), strip.position = "top") +
+    labs(title = "Heart Disease and Heavy Alchohol Consumption", x = 'Heavy Alcohol Consumption?', y = 'Count') +
+    scale_y_continuous(labels = label_number(scale = .1))
+```
+
+This is interesting. Although it is only by a small difference, it looks as though people with heart disease consume less alcohol than people without heart disease. Does this mean that there is a negative correlation between heavy drinking and heart disease?
+
+In the next section, we will build a model to see which risk factors have the strongest relationships with heart disease, and check to see if they agree with our visualizations.
+
+# Model Building
+
+From the hypothesis testings, \`HighBP\`, \`HighChol\`, \`Smoker\`, \`Stroke\`, \`PhysActivity\`, \`Veggies\`, \`HvyAlcoholConsump\`, \`AnyHealthcare\`, \`NoDocbcCost\`, \`DiffWalk\`, \`Sex\`, and \`Age\` have a very low p value and can be used as predictors in the model. But based on relevancy and from the plots, the list of predictors can be brought down to \`HighBP\`, \`HighChol\`, \`Smoker\`,\`HvyAlcoholConsump\`, \`Sex\` and \`Age\`.
+
+## General Logistic Regression Model
+
+```{r}
+# create a general model
+logistic_model <- glm(HeartDiseaseorAttack~HighBP+HighChol+Age+Sex+Smoker+HvyAlcoholConsump, family="binomial", data=filtered_data)
+probabilities <- predict(logistic_model, type = "response")
+
+predicted.classes <- ifelse(probabilities > 0.5, "pos", "neg")
+
+head(predicted.classes)
+
+summary(logistic_model)
+```
+
+The summary of our model reveals interesting information. The performance of a logistic regression is evaluated with specific key metrics.
+
+The low p-value for most explanatory variables indicates that there is a significant relationship between them and the response variable. This means that the null hypothesis can be rejected for these variables. 'Age2' have a p value higher than 0.05 indicating the irrelevance of the variable in predicting the target variable.
+
+AIC (Akaike Information Criteria): This is the equivalent of R2 in logistic regression. It measures the fit when a penalty is applied to the number of parameters. Smaller AIC values indicate the model is closer to the truth. This model has an AIC value of 52451.
+
+Null deviance: Explains how well the response is predicted by the model only with the intercept. Here, the null deviance value is 65284 on 47092 number of freedoms. The very high null deviance value indicates a lack of fit of the model . We can interpret it as a Chi-square value (fitted value different from the actual value hypothesis testing).
+
+Residual Deviance: It explains how well the response is predicted by a model with all the variables. Similar to the null deviance value, a high value of residual deviance 52415 also indicates a lack of fit of the model. It is also interpreted as a Chi-square hypothesis testing.
+
+Number of Fisher Scoring iterations: Number of iterations before converging. Here, there are 5 fisher scoring iterations.
+
+From the plot of Male Vs Female, it looks like Females have less prevelance to Heart-Disease than Males. Also, the health factors are different for both sexes. Therefore, it is better to build a model for each sexes separately.
+
+### Diagnostic plot for General logistic regression
+
+```{r}
+
+# tidying the data for plots
+Columns1 <- c('HighChol','HighBP','Smoker','Age','HvyAlcoholConsump', 'Sex')
+data_plot <- filtered_data[,(names(filtered_data) %in% Columns1)]
+predictors <- colnames(data_plot)
+
+data_plot <- data_plot %>%
+  mutate(logit = log(probabilities/(1-probabilities))) %>%
+  gather(key = "predictors", value = "predictor.value", -logit)
+
+```
+
+```{r}
+ggplot(data_plot, aes(logit, predictor.value))+
+  geom_point(size = 0.5, alpha = 0.5) +
+  geom_smooth(method = "loess") +
+  theme_bw() +
+  facet_wrap(~predictors, scales = "free_y")
+```
+
+
+This plots illustrates the relationship between the probability of heart disease and various predictors, including "HighBP," "HighChol," "Smoker," "Age," "Sex," and "HvyAlcoholConsump."
+
+Analysis of the plots reveals compelling insights into how these predictors influence the likelihood of heart disease:
+
+High Blood Pressure (HighBP):
+As the level of HighBP increases, there is a noticeable rise in the probability of heart disease. This suggests a positive correlation between high blood pressure and the likelihood of developing heart issues.
+
+High Cholesterol (HighChol):
+Similarly, an escalation in High Cholesterol levels corresponds to an increased probability of heart disease. This underscores the significance of cholesterol levels as a potential risk factor for cardiovascular issues.
+
+Smoking (Smoker):
+The predictor "Smoker" exhibits a discernible but relatively modest impact on the probability of heart disease. It suggests that smoking, while contributing to the likelihood of heart disease, may not be as potent a predictor as other factors.
+
+Age:
+The plot for age demonstrates a clear trend – as age advances, the probability of heart disease rises significantly. This aligns with the well-established understanding that age is a crucial determinant in cardiovascular health.
+
+Heavy Alcohol Consumption (HvyAlcoholConsump):
+Surprisingly, the plot indicates that an increase in heavy alcohol consumption is associated with a slight decrease in the probability of heart disease. This unexpected finding may warrant further investigation and consideration of potential confounding variables.
+
+Sex:
+The plot for sex underscores a noteworthy gender-based difference. It indicates that the probability of heart disease is higher for females compared to males. This highlights the importance of considering gender as a relevant factor in assessing heart disease risk.
+
+
+## Male Logistic Regression Model
+
+In this section, we will use a logistic regression to attempt to model the relationship between the response variable: heart disease, and the explanatory variables: high blood pressure, high cholesterol, smoking, age, and sex in Males.
+
+Subsetting the data set for Modelling. As the health factors of males and females are different, it is better to subset the data based on sex.
+
+```{r}
+# subsetting the male sex
+data_male <- filtered_data[(filtered_data$Sex == 0), ]
+
+# subsetting the female sex
+data_female <- filtered_data[(filtered_data$Sex == 1), ]
+```
+
+```{r}
+# binomial glm with v as the predictor for data_male
+data_male$HighBP <- as.factor(data_male$HighBP)
+data_male$HighChol <- as.factor(data_male$HighChol)
+data_male$Smoker <- as.factor(data_male$Smoker)
+data_male$Age <- as.factor(data_male$Age)
+data_male$HvyAlcoholConsump <- as.factor(data_male$HvyAlcoholConsump)
+
+logistic_model1 <- glm(HeartDiseaseorAttack~HighBP+HighChol+Smoker+Age+HvyAlcoholConsump, data = data_male, family = 'binomial')
+
+probabilities1 <- predict(logistic_model1, type = "response")
+
+predicted1.classes <- ifelse(probabilities1 > 0.5, "pos", "neg")
+
+head(predicted1.classes)
+```
+
+```{r}
+summary(logistic_model1)
+```
+
+The low p-value for most explanatory variables indicates that there is a significant relationship between them and the response variable. This means that the null hypothesis can be rejected for these variables. 'Age2' have a p value higher than 0.05 indicating the irrelevance of the variable in predicting the target variable.
+
+logistic_model1 model have an AIC value of 26681 which is approximately half of the AIC score of logistic_model for which the sexes where not separated. This indicates that separating sexes makes the model better for predicting the reponse variable. The null deviance value is 32343 on 23720 number of freedoms, which is much lower than that of logistic_model indicating a better fit of the model. The lower residual deviance value of 26647 also indicates a better fit of the model. There are 5 fisher scoring iterations.
+
+### Diagnostic Plots for the Male Model
+
+
+```{r}
+
+# tidying the data for plots
+Columns1 <- c('HighChol','HighBP','Smoker','Age','HvyAlcoholConsump')
+data_plot1 <- data_male[,(names(data_male) %in% Columns1)]
+predictors1 <- colnames(data_plot1)
+
+data_plot1 <- data_plot1 %>%
+  mutate(logit = log(probabilities1/(1-probabilities1))) %>%
+  gather(key = "predictors", value = "predictor.value", -logit)
+
+```
+
+```{r}
+ggplot(data_plot1, aes(logit, predictor.value))+
+  geom_point(size = 0.5, alpha = 0.5) +
+  geom_smooth(method = "loess") +
+  theme_bw() +
+  facet_wrap(~predictors, scales = "free_y")
+```
+
+
+This analysis explores the complex connection between various predictors and the likelihood of heart disease. The examination of critical factors like High Blood Pressure (HighBP) reveals a distinct positive association, signifying a significant contribution to the probability of cardiovascular issues. Likewise, an increase in High Cholesterol (HighChol) levels emphasizes its role as a noteworthy risk factor for heart disease. While the impact of smoking is noticeable, its predictive strength seems relatively moderate, suggesting that other factors may overshadow its influence. The age plot reaffirms a well-established pattern – a notable rise in the probability of heart disease as age advances, highlighting age as a crucial determinant in cardiovascular health. Unexpectedly, the plot for Heavy Alcohol Consumption (HvyAlcoholConsump) introduces a surprising discovery, indicating a slight reduction in the probability of heart disease with increased alcohol consumption, prompting further exploration of potential confounding variables. Together, these findings offer a comprehensive comprehension of the intricate relationship between predictors and the probability of heart disease.
+
+## Female Logistic Regression Model
+
+In this section, we will use a logistic regression to attempt to model the relationship between the response variable: heart disease, and the explanatory variables: high blood pressure, high cholesterol, smoking, age, and sex in Females.
+
+Prediction target - 'HeartDiseaseorAttack'
+
+Predictors - 'HighBP', 'HighChol', 'Smoker', 'Age','HvyAlcoholConsump'
+
+```{r}
+# binomial glm with v as the predictor for data_female
+data_female$HighBP <- as.factor(data_female$HighBP)
+data_female$HighChol <- as.factor(data_female$HighChol)
+data_female$Smoker <- as.factor(data_female$Smoker)
+data_female$Age <- as.factor(data_female$Age)
+data_female$HvyAlcoholConsump <- as.factor(data_female$HvyAlcoholConsump)
+
+logistic_model2 <- glm(HeartDiseaseorAttack~HighBP+HighChol+Smoker+Age+HvyAlcoholConsump, data = data_female, family = 'binomial')
+probabilities2 <- predict(logistic_model2, type = "response")
+predicted2.classes <- ifelse(probabilities2 > 0.5, "pos", "neg")
+head(predicted2.classes)
+```
+
+```{r}
+summary(logistic_model2)
+```
+
+Similar to logistic_model and logistc_model1, the low p-value for most explanatory variables indicates that there is a significant relationship between the explanatory and the response variables. This means that the null hypothesis can be rejected for these variables. 'Age2' and 'Age3' have a p value higher than 0.05 indicating the irrelevance of the variables in predicting the target variable.
+
+logistic_model2 model have an AIC value of 25603 which is lower than both logistic_model and logistic_model1. This indicates that the model predicts the response variable better.
+
+The null deviance value is 31804 on 23371 number of freedoms, which is much lower than that of logistic_model indicating a better fit of the model.
+
+The lower residual deviance value of 25569 also indicates a better fit of the model.
+
+There are 5 fisher scoring iterations.
+
+### Diagnostic Plots of the Female Model
+
+```{r}
+# tidying the data for plots
+Columns1 <- c('HighChol','HighBP','Smoker','Age','HvyAlcoholConsump')
+data_plot2 <- data_female[,(names(data_female) %in% Columns1)]
+predictors2 <- colnames(data_plot2)
+
+data_plot2 <- data_plot2 %>%
+  mutate(logit = log(probabilities2/(1-probabilities2))) %>%
+  gather(key = "predictors", value = "predictor.value", -logit)
+```
+
+```{r}
+ggplot(data_plot2, aes(logit, predictor.value))+
+  geom_point(size = 0.5, alpha = 0.5) +
+  geom_smooth(method = "loess") +
+  theme_bw() +
+  facet_wrap(~predictors, scales = "free_y")
+```
+
+Plots show that elevated High Blood Pressure (HighBP) and High Cholesterol (HighChol) significantly increase the likelihood. Smoking has a noticeable but moderate impact. Advancing age is a crucial factor, showing a substantial rise in heart disease probability. Unexpectedly, increased Heavy Alcohol Consumption (HvyAlcoholConsump) slightly reduces the likelihood, warranting further investigation. These insights offer a concise overview of the intricate dynamics influencing heart disease probability.
+
+
+## Step-wise Model Selection
+
+The step() function can be used to iterate through predictor variables, adding them and removing them, in order to find the optimal combination that results in the best model.
+
+### General
+
+```{r}
+# Forward selection
+
+model_start <- glm(HeartDiseaseorAttack~1,data = filtered_data, family = 'binomial')
+
+forward_model <- step(model_start, scope = HeartDiseaseorAttack~HighBP+HighChol+Smoker+Age+HvyAlcoholConsump, direction = "forward")
+```
+
+```{r}
+summary(forward_model)
+```
+
+The forward step-wise model function selected \`HeartDiseaseorAttack \~ Age + HighBP + HighChol + Sex + Smoker + 
+ HvyAlcoholConsump\` as the best model for filtered_data dataframe. The AIC score for this model is 52450.95. This indicates that out of the selected variables as predictors, logistic_model is the right choice of prediction model for filtered_data.
+
+```{r}
+# Backward elimination
+backward_model <- step(model_start, scope = HeartDiseaseorAttack~HighBP+HighChol+Smoker+Age+HvyAlcoholConsump, direction = "backward")
+```
+
+```{r}
+summary(backward_model)
+```
+
+The backward step-wise model function also selected \`HeartDiseaseorAttack \~ Age + HighBP + HighChol + Sex + Smoker + 
+ HvyAlcoholConsump\` as the best model for filtered_data dataframe.
+
+```{r}
+# Both forward and backward selection
+both_model <- step(model_start, scope = HeartDiseaseorAttack~HighBP+HighChol+Smoker+Age+HvyAlcoholConsump, direction = "both")
+```
+
+```{r}
+summary(both_model)
+```
+
+The step-wise model function withboth direction also selected \`HeartDiseaseorAttack \~ Age + HighBP + HighChol + Sex + Smoker + HvyAlcoholConsump\` as the best model for filtered_data dataframe. Therefore implementing the step function concludes that logistic_model is the best possible predicting model with the chosen explanatory variables.
+
+### Males
+
+```{r}
+# Forward selection
+
+model_male_start <- glm(HeartDiseaseorAttack~1,data = data_male, family = 'binomial')
+
+forward_model_Male <- step(model_male_start, scope = HeartDiseaseorAttack~HighBP+HighChol+Smoker+Age+HvyAlcoholConsump, direction = "forward")
+```
+
+```{r}
+summary(forward_model_Male)
+```
+
+The forward step function returns \`HeartDiseaseorAttack \~ Age + HighBP + HighChol + Smoker + HvyAlcoholConsump\` as the best fit model for data_male with the selected predictors. This is same as that of logistic_model1 defined above.
+
+```{r}
+# Backward elimination
+backward_model_male <- step(logistic_model1, direction = "backward")
+```
+
+```{r}
+summary(backward_model_male)
+```
+
+The backward model also returned logistic_model1 as the best fit model for predicting response variable for the data_male data frame.
+
+```{r}
+# Both forward and backward selection
+both_model_male <- step(model_male_start, scope = HeartDiseaseorAttack~HighBP+HighChol+Smoker+Age+HvyAlcoholConsump, direction = "both")
+```
+
+```{r}
+summary(both_model_male)
+```
+
+Step function in 'Both' directions also selected the logistic_model1 as the best model for the selected predictors.
+
+### Females
+
+```{r}
+# Forward selection in data_female
+
+model_female_start <- glm(HeartDiseaseorAttack~1,data = data_female, family = 'binomial')
+forward_model_female <- step(model_female_start, scope = HeartDiseaseorAttack~HighBP+HighChol+Smoker+Age+HvyAlcoholConsump, direction = "forward")
+```
+
+```{r}
+summary(forward_model_female)
+```
+
+The forward step function returned the logistic_model2 as the best model for predicting response variable for the data_female dataframe.
+
+```{r}
+# Backward selection for data_female
+backward_model_female <- step(logistic_model2, direction = "backward")
+```
+
+```{r}
+summary(backward_model_female)
+```
+
+```{r}
+# both selection in data_female
+
+both_model_female <- step(model_female_start, scope = HeartDiseaseorAttack~HighBP+HighChol+Smoker+Age+HvyAlcoholConsump, direction = "both")
+```
+
+```{r}
+summary(both_model_female)
+```
+
+Similar to the forward step function, both backward and both directions in step function returned the logistic_model2 as the best model for prediction.
+
+# Predictions using the General Logistic Model
+
+Next, we can use our model to predict the probability of success (heart disease) with different values for the explanatory variables.
+
+Here are a few different combinations:
+
+Let's compare the results between smokers and non-smokers.
+
+```{r}
+# smoker
+predict(logistic_model, data.frame(HighBP=0, HighChol=0, Smoker=1, Age=7, HvyAlcoholConsump=0, Sex = 1))
+```
+
+```{r}
+# non-smoker
+predict(logistic_model, data.frame(HighBP=0, HighChol=0, Smoker=0, Age=7, HvyAlcoholConsump=0, Sex = 1))
+```
+
+The results show that when all other variables are the same, smoking does slightly increase the risk of having heart disease.
+
+Let's now compare the risk for people with and without high cholesterol.
+
+```{r}
+# with
+predict(logistic_model, data.frame(HighBP=1, HighChol=1, Smoker=1, Age=60, HvyAlcoholConsump=0, Sex = 1))
+```
+
+```{r}
+# without
+predict(logistic_model, data.frame(HighBP=1, HighChol=0, Smoker=1, Age=60, HvyAlcoholConsump=0, Sex = 1))
+```
+
+These numbers indicate that people without high cholesterol have a significantly lower probability of having heart disease, which makes sense, as high cholesterol is highly correlated with it.
+
+Let's compare the differences between males and females.
+
+```{r}
+# female
+predict(logistic_model, data.frame(HighBP=1, HighChol=1, Smoker=0, Age=25, Sex=0, HvyAlcoholConsump = 0))
+```
+
+```{r}
+# male
+predict(logistic_model, data.frame(HighBP=1, HighChol=1, Smoker=0, Age=25, Sex=1, HvyAlcoholConsump = 0))
+```
+
+By comparing these two results, we can see that males have a higher probability of having heart disease.
+
+Now let's try using explanatory variables that should ideally have the lowest risk of heart disease vs ones with the highest
+
+```{r}
+# least risk
+predict(logistic_model, data.frame(HighBP=0, HighChol=0, Smoker=0, Age=1, Sex=0, HvyAlcoholConsump = 0))
+```
+
+```{r}
+# highest risk
+predict(logistic_model, data.frame(HighBP=1, HighChol=1, Smoker=1, Age=30, Sex=1, HvyAlcoholConsump = 1))
+```
+
+As expected, when a person has high blood pressure, high cholesterol, smokes, is older in age, and is male, there is a high probability that they will have heart disease compared to a person that doesn't have high blood pressure, high cholesterol, doesn't smoke, is young, and is female.
+
+# Assessing Model Performance
+
+## Confidence Intervals
+
+Confidence intervals are used to measure the accuracy of the coefficients of the predictor variables in the model. Here, we specified that the confidence level should be 99%.
+
+```{r}
+confint(logistic_model, level = 0.99)
+```
+
+The output shows that we are 99% confident that the coefficients for high blood pressure in the model are between 0.77 and 0.89, and so on for the remaining variables. Another thing to note is that the variable for high blood pressure also has the widest confidence interval out of all variables, and age has the narrowest.
+
+## Confusion Matrix
+
+A confusion matrix is another way of assessing the performance of a logistic regression. It provides the number of true positives, true negatives, false positives, and false negatives. Let's give it a try.
+
+```{r}
+#split data set into training and testing set
+set.seed(1)
+
+sample <- sample(c(TRUE, FALSE), nrow(filtered_data), replace=TRUE, prob=c(0.7,0.3))
+
+train <- filtered_data[sample, ]
+test <- filtered_data[!sample, ]
+```
+
+```{r}
+# create a general model from the trained data
+g_model <- glm(HeartDiseaseorAttack~HighBP+HighChol+Age+Sex+Smoker, family="binomial", data=train)
+```
+
+```{r}
+# Make predictions
+predictions <- predict(g_model, newdata = test, type = "response")
+```
+
+```{r}
+# Convert the true labels to a factor with the same levels
+predictions <- factor(ifelse(predictions > 0.5, 1, 0), levels = c(0, 1))
+test$HeartDiseaseorAttack <- factor(test$HeartDiseaseorAttack, levels = c(0, 1))
+
+# create the confusion matrix
+confusionMatrix(test$HeartDiseaseorAttack, predictions)
+```
+
+The results of the confusion matrix show that the model correctly predicted 5,424 instances of heart disease, and 4,602 instances of no heart disease. However, it also incorrectly predicted 2,447 instances of heart disease, and 1,655 of no heart disease. Furthermore, the accuracy was found to be 0.71, that is, the proportion of correctly classified instances out of all. This indicates that we have a decent classifier, that doesn't perform poorly, but also not as best as it could be.
+
+## ROC Curve
+
+The Receiver Operating Characteristic plot is used to visualize the trade-off between sensitivity and specificity in our model. A perfect model would display an ROC curve that is very close to the top left corner, indicating a high true positive rate, and a low false positive rate.
+
+Let's start by creating some predictions for the model.
+
+```{r}
+# create predictions
+predictions <- predict(logistic_model, newdata = test, type = "response")
+
+# get predictions and response variable to be same size
+predictions <- factor(ifelse(predictions > 0.5, 1, 0), levels = c(0, 1))
+
+test$HeartDiseaseorAttack <- factor(test$HeartDiseaseorAttack, levels = c(0, 1))
+
+# turn predictions into a numeric type
+predictions <- as.numeric(predictions)
+```
+
+```{r}
+# create roc curve
+roc_curve <- roc(test$HeartDiseaseorAttack, predictions)
+```
+
+```{r}
+# Plot the ROC curve
+plot(roc_curve, main = "ROC Curve for the Logistic Regression Model")
+
+# Add a reference line for a random classifier
+abline(0, 1, lty = 2, col = "gray")  
+```
+
+In comparison to the diagonal line, which represents a model with no discrimination power, this ROC curve is much closer to the top left, indicating some amount of discrimination power, but perhaps not the best.
+
+The AUC, or "area under the curve" is a value that can be used to summarize the performance of the model.
+
+```{r}
+# calculating the AUC
+auc(roc_curve)
+```
+
+We can see here that the area under the curve is 0.71. A perfect classifier would have an AUC of 1.0. This value, along with the ROC plot, further confirm that our classifier is decent, but not perfect.
+
+## Leave One Out Cross-Validation
+
+LOOCV is a form of cross-validation where the model is trained on all data except one point, which them model then attempts to accurately predict. This process is repeated for every point in the data set.
+
+```{r}
+# create a model with no predictors
+nopred_logistic_model <- glm(HeartDiseaseorAttack~1, family="binomial", data=filtered_data)
+```
+
+```{r}
+set.seed(5)
+
+# model with predictors
+cv.glm(filtered_data, logistic_model, K = 5)$delta[1]
+
+# model with no predictors
+cv.glm(filtered_data, nopred_logistic_model, K = 5)$delta[1]
+```
+
+The results for the LOOCV show that the model with multiple predictors had a prediction error of 0.19, significantly better than the model with no predictors, which had a prediction error of 0.25.
+
+## Root Mean Squared Residual
+
+The RMSR is a way of measuring the goodness of fit of a model. The residuals from the model are extracted and squared to prevent positive and negative values from canceling out. Then, the mean of the squared residuals is calculated and the square root of this value is taken. This is a measure of the average size of the residuals. The lower the RMSR, the closer the predicted probabilities are to the actual values.
+
+```{r}
+# general model
+sqrt(mean(resid(logistic_model) ^ 2))
+```
+
+```{r}
+# general model with no predictors
+sqrt(mean(resid(nopred_logistic_model) ^ 2))
+```
+
+```{r}
+# male model
+sqrt(mean(resid(logistic_model1) ^ 2))
+```
+
+```{r}
+# female model
+sqrt(mean(resid(logistic_model2) ^ 2))
+```
+
+These results show that out of the three models, the RMSR value is the least for logistic_model2. Therefore, this model predicts better than the other two.
+
+# Conclusion
+
+Heart disease is an illness that can be predicted by many different risk factors. In this project, we began by cleaning the data to suit our task. Next, we plotted the relationships of several variables of interest. Briefly, our plots showed that in general, people with heart disease tended to have high cholesterol, high blood pressure, smoked, were older, and were male.
+
+In order to find the predictors of Heart disease, hypothesis testing was done. For this a filtered data frame was defined...
+
+For predicting Heart Disease or Attack for people with specific values for different health factors, a generalized linear binomial family model, \`logistic_model\` is defined using HighBP, HighChol, Age, Sex, Smoker, and HvyAlcoholConsump as explanatory variables. The null deviance, AIC, and residual null deviance values were much higher. The diagnostic plots provide valuable insights into how various predictors interact to influence the probability of heart disease. These observations underscore the importance of a detailed understanding of multiple risk factors to enhance the accuracy of predictive models and guide targeted interventions for cardiovascular health. The plots indicate that the probability of heart disease tends to rise with higher levels of high blood pressure, elevated cholesterol, and advancing age. Additionally, the habit of smoking is associated with an increased probability of heart disease.
+ 
+In order to build a better fit model, the sexes were defined separately as data_male and data_female data frames. A generalized binomial model(logistic_model1 and logistic_model2 for data_male and data_female respectively) is defined for both data frames using HighBP, HighChol, Age, Smoker, and HvyAlcoholConsump as predictors. The AIC, null deviance, and residual null deviance scores were much lower for both models compared to the logistic_model defined without separating the sexes. Moreover, step-wise selection function in all 'forward', 'backward', and 'both' directions were used to find the best fit model and logistic_model, logistic_model1, and logistic_model2 turned out to the best fit models using the selected features as predictors.
+
+When we attempted to use the model to predict the probability of heart disease based on different factors, the results were consistent with our previous knowledge. That is, people without high blood pressure, high cholesterol, young of age, non-smokers, that were female were about five times less likely to have heart disease in comparison to their counterparts.
+
+The performance of our model was assessed using confidence intervals, a confusion matrix, and ROC curve, LOOCV, and the RMSR. The confidence intervals were determined in order to help reassure us of the coefficients obtained from the model. It was determined that we were 99% confident that the coefficients we obtained were within the resulting interval. Next, we used a confusion matrix to find the specificity and sensitivity of our model. The results showed that our classifier had am accuracy of 0.71 which is decently close to 1.0, but not amazing. To further test the specificity and sensitivity, we plotted an ROC curve that further confirmed our results - our classifier had decent predictive power. This was further confirmed by the AUC. LOOCV was also another method we used. We used a 5-fold cross validation on our main logistic model with predictors and one without. The results showed that the model with predictors was better than the one without, as it had a lower prediction error. The lowest RMSR is the model subsetted to only include female, indicating that it performs the best out of all.
+
+As evident from the predictions and the model assessments, it can be concluded that the logistic_model is not the best, but did a great job in identifying some of the relevant features that can be used to predict the risk of Heart disease or attack in a person. More analysis could be done to identify the best predicting model.
+
+From this analysis, we were able to confirm the heart disease predictors identified by the CDC. High blood pressure and high cholesterol are highly correlated to heart disease, and age, smoking, and sex have a significant, albeit weaker correlation to it as well. One surprising thing to note is that, although the CDC determined heavy alcohol consumption to be a possible explanatory variable for heart disease, our studies showed that they were in fact slightly negatively correlated. Our study only looked at a handful of factors suspected to be related to heart disease. This data set has the potential to allow for much more deep statistical testing to extract possible causes for heart disease and provide further insight on how to detect it and ultimately provide treatment for patients.
+
+
+
